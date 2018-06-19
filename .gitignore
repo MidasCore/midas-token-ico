@@ -59,3 +59,9 @@ typings/
 
 # next.js build output
 .next
+
+.DS_Store
+build
+truffle-config.js
+package-lock.json
+.idea
