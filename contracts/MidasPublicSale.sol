@@ -102,20 +102,23 @@ contract MidasPublicSale {
 
 
     function getBonus(uint _tokens) public pure returns (uint){
-        return _tokens.mul(10).div(100);
+        return _tokens.mul(0).div(100);
     }
 
     event Buy(address _buyer, uint _tokens, uint _payedWei, uint _bonus);
 
     function buy(address recipient) payable public returns (uint){
-        require(tx.gasprice <= maxGasPrice);
-        require(tx.gasprice >= minGasPrice);
-
+//        log0("something in here");
+//        require(tx.gasprice <= maxGasPrice);
+//        require(tx.gasprice >= minGasPrice);
+//
         require(!haltSale);
         require(saleStarted());
         require(!saleEnded());
 
         uint ethBuyValue = msg.value;
+
+        log0("something in here");
         // require minimum contribute 0.1 ETH
         require(ethBuyValue >= minContribution);
 
@@ -234,7 +237,6 @@ contract MidasPublicSale {
         raisedWei = raisedWei.add(allowValue);
         // 1ETH = 10000 MAS
         uint recievedTokens = allowValue.mul(10000);
-        // TODO bounce
         uint bonus = getBonus(recievedTokens);
 
         recievedTokens = recievedTokens.add(bonus);

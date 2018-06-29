@@ -3,273 +3,224 @@ pragma solidity ^0.4.23;
 import 'zeppelin-solidity/contracts/token/ERC20/StandardToken.sol';
 import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
 import 'zeppelin-solidity/contracts/math/SafeMath.sol';
-import './MidasPioneerSale.sol';
+import "zeppelin-solidity/contracts/lifecycle/Pausable.sol";
 
-contract MidasToken is StandardToken, Ownable {
-    string  public  constant name = "Midas";
-    string  public  constant symbol = "MAS";
-    uint    public  constant decimals = 18;
-    uint    public   totalSupply = 500000000 * 10**decimals; //500,000,000
+contract MidasToken is StandardToken, Pausable {
+    string public constant name = 'MidasProtocol';
+    string public constant symbol = 'MAS';
+    uint256 public constant minTomoContribution = 100 ether;
+    uint256 public constant minEthContribution = 0.1 ether;
+    uint256 public constant maxEthContribution = 500 ether;
+    uint256 public constant ethConvertRate = 10000; // 1 ETH = 10000 MAS
+    uint256 public constant tomoConvertRate = 10; // 1 TOMO = 10 MAS
+    uint256 public totalTokenSold = 0;
+    uint256 public maxCap = maxEthContribution.mul(ethConvertRate); // Max MAS can buy
 
-    uint    public  constant founderAmount = 125000000 * 10**decimals; // 125,000,000
-    uint    public  constant advisorOperateMarketingAmount = 125000000 * 10**decimals; // 125,000,000
-    uint    public  constant pioneerSaleAmount = 245000000 * 10**decimals; // 245,000,000
-    uint    public  constant publicSaleAmount = 5000000 * 10**decimals; // 5,000,000
+    uint256 public constant decimals = 18;
+    address public tokenSaleAddress;
+    address public midasDepositAddress;
+    address public ethFundDepositAddress;
+    address public midasFounderAddress;
+    address public midasAdvisorOperateMarketingAddress;
 
-    address public   midasFounderCoreStaffWallet;
-    address public   midasAdvisorOperateMarketingWallet;
-    address public   midasPioneerSaleWallet;
-    address public   midasPublicSaleWallet;
+    uint256 public fundingStartTime;
+    uint256 public fundingEndTime;
 
-    uint    public  saleStartTime;
-    uint    public  saleEndTime;
-
-    address public  tokenSaleContract;
-    MidasPioneerSale public privateSaleList;
+    uint256 public constant midasDeposit = 500000000 * 10 ** decimals; // 500.000.000 tokens
+    uint256 public constant tokenCreationCap = 5000000 * 10 ** 18; // 5.000.000 token for sale
 
     mapping(address => bool) public frozenAccount;
-    mapping(address => uint) public frozenTime;
-    mapping(address => uint) public maxAllowedAmount;
+    mapping(address => uint256) public participated;
+
+    mapping(address => uint256) public whitelist;
+    bool public isFinalized;
+    bool public isTransferable;
 
     /* This generates a public event on the blockchain that will notify clients */
-    event FrozenFunds(address target, bool frozen, uint _seconds);
+    event FrozenFunds(address target, bool frozen);
+    event BuyByEth(address from, address to, uint256 val);
+    event BuyByTomo(address from, address to, uint256 val);
+    event ListAddress(address _user, uint256 cap, uint256 _time);
+    event RefundMidas(address to, uint256 val);
 
-    function checkMaxAllowed(address target) public constant returns (uint) {
-        uint256 maxAmount = balances[target];
-        if (target == midasFounderCoreStaffWallet) {
-            maxAmount = 125000000 * 1e18;
-        }
-        if (target == midasAdvisorOperateMarketingWallet) {
-            maxAmount = 125000000 * 1e18;
-        }
-        if (target == midasPioneerSaleWallet) {
-            maxAmount = 245000000 * 1e18;
-        }
-        if (target == midasPublicSaleWallet) {
-            maxAmount = 5000000 * 1e18;
-        }
-        return maxAmount;
+    //============== MIDAS TOKEN ===================//
+
+    constructor (address _midasDepositAddress, address _ethFundDepositAddress, address _midasFounderAddress, address _midasAdvisorOperateMarketingAddress, uint256 _fundingStartTime, uint256 _fundingEndTime) public {
+        midasDepositAddress = _midasDepositAddress;
+        ethFundDepositAddress = _ethFundDepositAddress;
+        midasFounderAddress = _midasFounderAddress;
+        midasAdvisorOperateMarketingAddress = _midasAdvisorOperateMarketingAddress;
+
+        fundingStartTime = _fundingStartTime;
+        fundingEndTime = _fundingEndTime;
+
+        balances[midasDepositAddress] = midasDeposit;
+        emit Transfer(0x0, midasDepositAddress, midasDeposit);
+        totalSupply_ = midasDeposit;
+        isFinalized = false;
+        isTransferable = true;
     }
 
-    function selfFreeze(bool freeze, uint _seconds) public {
-        // selfFreeze cannot more than 7 days
-        require(_seconds <= 7 * 24 * 3600);
-        // if unfreeze
-        if (!freeze) {
-            // get End time of frozenAccount
-            uint frozenEndTime = frozenTime[msg.sender];
-            // if now > frozenEndTime
-            require(now >= frozenEndTime);
-            // unfreeze account
-            frozenAccount[msg.sender] = freeze;
-            // set time to 0
-            _seconds = 0;
-        } else {
-            frozenAccount[msg.sender] = freeze;
-
-        }
-        // set endTime = now + _seconds to freeze
-        frozenTime[msg.sender] = now + _seconds;
-        emit FrozenFunds(msg.sender, freeze, _seconds);
-    }
-
-    function freezeAccount(address target, bool freeze, uint _seconds) onlyOwner public {
-        // if unfreeze
-        if (!freeze) {
-            // get End time of frozenAccount
-            uint frozenEndTime = frozenTime[target];
-            // if now > frozenEndTime
-            require(now >= frozenEndTime);
-            // unfreeze account
-            frozenAccount[target] = freeze;
-            // set time to 0
-            _seconds = 0;
-        } else {
-            frozenAccount[target] = freeze;
-
-        }
-        // set endTime = now + _seconds to freeze
-        frozenTime[target] = now + _seconds;
-        emit FrozenFunds(target, freeze, _seconds);
-
-    }
-
-    modifier validDestination(address to) {
-        require(to != address(0x0));
-        require(to != address(this));
-        require(!frozenAccount[to]);
-        // Check if recipient is frozen
-        _;
-    }
-    modifier validFrom(address from){
-        require(!frozenAccount[from]);
-        // Check if sender is frozen
-        _;
-    }
-    modifier onlyWhenTransferEnabled() {
-        if (now <= saleEndTime && now >= saleStartTime) {
-            require(msg.sender == tokenSaleContract);
-        }
-        _;
-    }
-    modifier onlyPrivateListEnabled(address _to){
-        require(now <= saleStartTime);
-        uint allowcap = privateSaleList.getCap(_to);
-        require(allowcap > 0);
-        _;
-    }
-    function setPrivateList(MidasPioneerSale _privateSaleList) onlyOwner public {
-        require(_privateSaleList != address(0x0));
-        privateSaleList = _privateSaleList;
-
-    }
-
-    constructor (
-        uint startTime,
-        uint endTime,
-        address admin,
-        address _midasFounderCoreStaffWallet, // founder wallet
-        address _midasAdvisorOperateMarketingWallet, // advisor wallet
-        address _midasPioneerSaleWallet, // network growth wallet, bonus
-        address _midasPublicSaleWallet // public sale wallet
-    ) public {
-        require(admin != address(0x0));
-        require(_midasFounderCoreStaffWallet != address(0x0));
-        require(_midasAdvisorOperateMarketingWallet != address(0x0));
-        require(_midasPioneerSaleWallet != address(0x0));
-        require(_midasPublicSaleWallet != address(0x0));
-
-        // Mint all tokens. Then disable minting forever.
-        balances[msg.sender] = totalSupply;
-        emit Transfer(address(0x0), msg.sender, totalSupply);
-        // init internal amount limit
-        // set address when deploy
-        midasFounderCoreStaffWallet = _midasFounderCoreStaffWallet;
-        midasAdvisorOperateMarketingWallet = _midasAdvisorOperateMarketingWallet;
-        midasPioneerSaleWallet = _midasPioneerSaleWallet;
-        midasPublicSaleWallet = _midasPublicSaleWallet;
-
-        saleStartTime = startTime;
-        saleEndTime = endTime;
-        transferOwnership(admin);
-    }
-
-    // get addr balance
-    function getBalance(address addr)
-    public view returns (uint) {
-        return balances[addr];
-    }
-
-    function setTimeSale(uint startTime, uint endTime) onlyOwner
-    public {
-        require(now < saleStartTime || now > saleEndTime);
-        require(now < startTime);
-        require(startTime < endTime);
-        saleStartTime = startTime;
-        saleEndTime = endTime;
-    }
-
-    function setTokenSaleContract(address _tokenSaleContract)
-    onlyOwner
-    public {
-        // check address ! 0
-        require(_tokenSaleContract != address(0x0));
-        // do not allow run when saleStartTime <= now <= saleEndTime
-        require(now < saleStartTime || now > saleEndTime);
-
-        tokenSaleContract = _tokenSaleContract;
-    }
-
-    function transfer(address _to, uint _value)
-    onlyWhenTransferEnabled validDestination(_to) validFrom(msg.sender)
-    public returns (bool) {
-        if (msg.sender == midasFounderCoreStaffWallet || msg.sender == midasAdvisorOperateMarketingWallet ||
-        msg.sender == midasPioneerSaleWallet || msg.sender == midasPublicSaleWallet) {
-
-            // check maxAllowedAmount
-            uint withdrawAmount = maxAllowedAmount[msg.sender];
-            uint defaultAllowAmount = checkMaxAllowed(msg.sender);
-            uint maxAmount = defaultAllowAmount - withdrawAmount;
-            // _value transfer must <= maxAmount
-            require(maxAmount >= _value);
-            //
-            // if maxAmount = 0, need to block this msg.sender
-            if (maxAmount == _value) {
-
-                bool isTransfer = super.transfer(_to, _value);
-                // freeze account
-                selfFreeze(true, 24 * 3600);
-                // temp freeze account 24h
-                maxAllowedAmount[msg.sender] = 0;
-                return isTransfer;
-            } else {
-                // set max withdrawAmount
-                maxAllowedAmount[msg.sender] = maxAllowedAmount[msg.sender].add(_value);
-                //
-
-            }
-        }
+    function transfer(address _to, uint256 _value) public whenNotPaused returns (bool success) {
+        require(isTransferable == true || msg.sender == midasAdvisorOperateMarketingAddress || msg.sender == midasDepositAddress);
         return super.transfer(_to, _value);
-
     }
 
-    function transferPrivateSale(address _to, uint _value)
-    onlyOwner onlyPrivateListEnabled(_to)
-    public returns (bool) {
-        return transfer(_to, _value);
+    function setTransferStatus(bool status) public onlyOwner {
+        isTransferable = status;
     }
 
-    function transferFrom(address _from, address _to, uint _value)
-    onlyWhenTransferEnabled validDestination(_to) validFrom(_from)
-    public returns (bool) {
-        if (_from == midasFounderCoreStaffWallet || _from == midasAdvisorOperateMarketingWallet ||
-        _from == midasPioneerSaleWallet || _from == midasPublicSaleWallet) {
+    function approve(address _spender, uint256 _value) public whenNotPaused returns (bool success) {
+        return super.approve(_spender, _value);
+    }
 
-            // check maxAllowedAmount
-            uint withdrawAmount = maxAllowedAmount[_from];
-            uint defaultAllowAmount = checkMaxAllowed(_from);
-            uint maxAmount = defaultAllowAmount - withdrawAmount;
-            // _value transfer must <= maxAmount
-            require(maxAmount >= _value);
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return super.balanceOf(_owner);
+    }
 
-            // if maxAmount = 0, need to block this _from
-            if (maxAmount == _value) {
+    function freezeAccount(address _target, bool _freeze) onlyOwner public {
+        frozenAccount[_target] = _freeze;
+        emit FrozenFunds(_target, _freeze);
+    }
 
-                bool isTransfer = super.transfer(_to, _value);
-                // freeze account
-                selfFreeze(true, 24 * 3600);
-                maxAllowedAmount[_from] = 0;
-                return isTransfer;
-            } else {
-                // set max withdrawAmount
-                maxAllowedAmount[_from] = maxAllowedAmount[_from].add(_value);
-
-            }
+    function freezeAccounts(address[] _targets, bool _freeze) onlyOwner public {
+        for (uint i = 0; i < _targets.length; i++) {
+            freezeAccount(_targets[i], _freeze);
         }
-        return super.transferFrom(_from, _to, _value);
     }
 
-    event Burn(address indexed _burner, uint _value);
+    //============== MIDAS PIONEER SALE ===================//
 
-    function burn(uint _value)
-    onlyWhenTransferEnabled
-    public returns (bool){
-        balances[msg.sender] = balances[msg.sender].sub(_value);
-        totalSupply = totalSupply.sub(_value);
-        emit Burn(msg.sender, _value);
-        emit Transfer(msg.sender, address(0x0), _value);
+    //============== MIDAS WHITELIST ===================//
+
+    function listAddress(address _user, uint256 cap) public onlyOwner {
+        whitelist[_user] = cap;
+        emit ListAddress(_user, cap, now);
+    }
+
+    function listAddresses(address[] _users, uint256[] _caps) public onlyOwner {
+        for (uint i = 0; i < _users.length; i++) {
+            listAddress(_users[i], _caps[i]);
+        }
+    }
+
+    function getCap(address _user) public view returns (uint) {
+        return whitelist[_user];
+    }
+
+    //============== MIDAS PUBLIC SALE =================//
+
+    function() public payable {
+        buyByEth(msg.sender, msg.value);
+    }
+
+    function buyByEth(address _recipient, uint256 _value) public returns (bool success) {
+        require(_value > 0);
+        require(now >= fundingStartTime);
+        require(now <= fundingEndTime);
+        require(_value >= minEthContribution);
+        require(_value <= maxEthContribution);
+        require(!isFinalized);
+        require(totalTokenSold < tokenCreationCap);
+
+        uint256 tokens = _value.mul(ethConvertRate);
+
+        uint256 cap = getCap(_recipient);
+        require(cap > 0);
+
+        uint256 tokensToAllocate = 0;
+        uint256 tokensToRefund = 0;
+        uint256 etherToRefund = 0;
+
+        tokensToAllocate = maxCap.sub(participated[_recipient]);
+
+        // calculate refund if over max cap or individual cap
+        if (tokens > tokensToAllocate) {
+            tokensToRefund = tokens.sub(tokensToAllocate);
+            etherToRefund = tokensToRefund.div(ethConvertRate);
+        } else {
+            // user can buy amount they want
+            tokensToAllocate = tokens;
+        }
+
+        uint256 checkedTokenSold = totalTokenSold.add(tokensToAllocate);
+
+        // if reaches hard cap
+        if (tokenCreationCap < checkedTokenSold) {
+            tokensToAllocate = tokenCreationCap.sub(totalTokenSold);
+            tokensToRefund = tokens.sub(tokensToAllocate);
+            etherToRefund = tokensToRefund.div(ethConvertRate);
+            totalTokenSold = tokenCreationCap;
+        } else {
+            totalTokenSold = checkedTokenSold;
+        }
+
+        // save to participated data
+        participated[_recipient] = participated[_recipient].add(tokensToAllocate);
+
+        // allocate tokens
+        balances[midasDepositAddress] = balances[midasDepositAddress].sub(tokensToAllocate);
+        balances[_recipient] = balances[_recipient].add(tokensToAllocate);
+
+        // refund ether
+        if (etherToRefund > 0) {
+            // refund in case user buy over hard cap, individual cap
+            emit RefundMidas(msg.sender, etherToRefund);
+            msg.sender.transfer(etherToRefund);
+        }
+        ethFundDepositAddress.transfer(address(this).balance);
+        //        // lock this account balance
+        emit BuyByEth(midasDepositAddress, _recipient, _value);
         return true;
     }
 
-    // save some gas by making only one contract call
-    function burnFrom(address _from, uint256 _value)
-    onlyWhenTransferEnabled
-    public returns (bool) {
-        assert(transferFrom(_from, msg.sender, _value));
-        return burn(_value);
+    function buyByTomo(address _recipient, uint256 _value) public onlyOwner returns (bool success) {
+        require(_value > 0);
+        require(now >= fundingStartTime);
+        require(now <= fundingEndTime);
+        require(_value >= minTomoContribution);
+        require(!isFinalized);
+        require(totalTokenSold < tokenCreationCap);
+
+        uint256 tokens = _value.mul(tomoConvertRate);
+
+        uint256 cap = getCap(_recipient);
+        require(cap > 0);
+
+        uint256 tokensToAllocate = 0;
+        uint256 tokensToRefund = 0;
+        tokensToAllocate = maxCap;
+        // calculate refund if over max cap or individual cap
+        if (tokens > tokensToAllocate) {
+            tokensToRefund = tokens.sub(tokensToAllocate);
+        } else {
+            // user can buy amount they want
+            tokensToAllocate = tokens;
+        }
+
+        uint256 checkedTokenSold = totalTokenSold.add(tokensToAllocate);
+
+        // if reaches hard cap
+        if (tokenCreationCap < checkedTokenSold) {
+            tokensToAllocate = tokenCreationCap.sub(totalTokenSold);
+            totalTokenSold = tokenCreationCap;
+        } else {
+            totalTokenSold = checkedTokenSold;
+        }
+
+        // allocate tokens
+        balances[midasDepositAddress] = balances[midasDepositAddress].sub(tokensToAllocate);
+        balances[_recipient] = balances[_recipient].add(tokensToAllocate);
+
+        emit BuyByTomo(midasDepositAddress, _recipient, _value);
+        return true;
     }
 
-    function emergencyERC20Drain(ERC20 token, uint amount) onlyOwner public {
-        token.transfer(owner, amount);
+    /// @dev Ends the funding period and sends the ETH home
+    function finalize() external onlyOwner {
+        require(!isFinalized);
+        // move to operational
+        isFinalized = true;
+        ethFundDepositAddress.transfer(address(this).balance);
     }
 }
